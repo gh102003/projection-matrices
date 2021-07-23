@@ -1,8 +1,8 @@
-from PIL import Image, ImageTk
 import numpy as np
-import itertools
 import tkinter as tk
 import time
+
+import controls
 
 
 # 2x3 matrix to map 3D to 2D
@@ -12,7 +12,7 @@ base_projection = np.array([[10, 0, 0],
 
 class Camera:
     def __init__(self):
-        self.pos = np.array([0, 0, 0], dtype=np.float64).reshape((3, 1))
+        self.pos = np.array([10, 10, -10], dtype=np.float64).reshape((3, 1))
         # pitch, roll, and yaw are angles (in radians) of anticlockwise rotations about the x, y and z axes respectively
         self.pitch = 0
         self.roll = 0
@@ -38,15 +38,17 @@ class Camera:
     def project(self, world):
         """
         Takes an array of 3d points and projects them into an array of 2d points
+
         world - 3xn matrix, each column representing a 3d point
+
         returns a 2xn matrix, each column representing a 2d point
         """
-        # start = time.perf_counter()
         # screen is a 3 x n matrix, each column representing coords of a value to be drawn
-        screen = np.dot(base_projection, self.pos -
-                        np.dot(self.create_rotation_matrix(), world))
-        # print(
-        # f"Projection took {1000 * (time.perf_counter() - start):4.0f} ms")
+
+        # rotate world
+        rotated_world = np.dot(self.create_rotation_matrix(), world)
+        screen = np.dot(base_projection, self.pos - rotated_world)
+
         return screen
 
 
@@ -54,19 +56,46 @@ camera = Camera()
 
 
 class Renderer:
-    def __init__(self, tkinter_canvas):
+    def __init__(self, tkinter_canvas, camera):
         self._canvas: tk.Canvas = tkinter_canvas
+        self._camera: Camera = camera
 
-    def render_line(self, a, b):
+    def clear(self):
+        self._canvas.delete("all")
+
+    def render_origin_marker(self):
+        origin = [0, 0, 0]
+        self.render_line(origin, [5, 0, 0], arrow="last", fill="red")
+        self.render_line(origin, [0, 5, 0], arrow="last", fill="green")
+        self.render_line(origin, [0, 0, 5], arrow="last", fill="blue")
+        self.render_point(origin, 3)
+
+
+    def render_point(self, a, radius):
+        """
+            Projects and renders a point onto the canvas, surrounded by a circle
+            
+            a - array (length 3) representing a 3d point
+
+            radius - an integer representing the radius of the 2d circle
+        """
+        point = np.array([a]).T
+        a2d = self._camera.project(point).T[0]
+        self._canvas.create_oval(*(a2d - radius), *(a2d + radius), fill="red")
+
+
+    def render_line(self, a, b, **kwargs):
         """
             Projects and renders a line onto the canvas
 
             a, b - arrays (length 3) representing two 3d points
+
+            **kwargs - extra kwargs for the tkinter create_line function
         """
         points = np.array([a, b]).T
-        projected = camera.project(points)
+        projected = self._camera.project(points)
         a2d, b2d = projected.T
-        self._canvas.create_line(a2d[0], a2d[1], b2d[0], b2d[1])
+        self._canvas.create_line(a2d[0], a2d[1], b2d[0], b2d[1], **kwargs)
 
     def render_quad(self, a, b, c, d):
         """
@@ -75,16 +104,17 @@ class Renderer:
             a, b, c, d - arrays (length 3) representing four 3d points
         """
         points = np.array([a, b, c, d]).T
-        projected = camera.project(points)
+        projected = self._camera.project(points)
         a2d, b2d, c2d, d2d = projected.T
         self._canvas.create_polygon(
             *a2d, *b2d, *c2d, *d2d, width=3, outline="black", fill="")
 
-    def render_cube(self, a, b):
+    def render_cube(self, a, b, fill=None):
         """
             Projects and renders a line onto the canvas
 
             a, b - arrays (length 3) representing two 3d points on opposite corners of the cube
+            fill - colour for the faces to be filled (optional)
         """
         points = np.array([
             # bottom
@@ -98,8 +128,19 @@ class Renderer:
             b,
             [a[0], b[1], b[2]],
         ]).T
-        projected = camera.project(points)
+        projected = self._camera.project(points)
         p, q, r, s, t, u, v, w = projected.T
+        
+        # FACES
+        if fill != None:
+            self._canvas.create_polygon(*p, *q, *r, *s, fill=fill, outline="")
+            self._canvas.create_polygon(*t, *u, *v, *w, fill=fill, outline="")
+            self._canvas.create_polygon(*p, *q, *u, *t, fill=fill, outline="")
+            self._canvas.create_polygon(*r, *s, *w, *v, fill=fill, outline="")
+            self._canvas.create_polygon(*p, *s, *w, *t, fill=fill, outline="")
+            self._canvas.create_polygon(*q, *r, *v, *u, fill=fill, outline="")
+        
+        # EDGES
         # bottom
         self._canvas.create_line(*p, *q)
         self._canvas.create_line(*q, *r)
@@ -117,129 +158,55 @@ class Renderer:
         self._canvas.create_line(*s, *w)
 
 
+
 # RENDERING ONTO CANVAS
 
-def render_PIL(canvas, renderer):
-    
-    canvas.delete("all")
+def update_canvas(renderer: Renderer):
+
+    renderer.clear()
 
     p1 = [2, 2, 5]
     p2 = [2, 30, 5]
     p3 = [30, 30, 5]
     p4 = [30, 2, 5]
     renderer.render_quad(p1, p2, p3, p4)
-    renderer.render_cube([2, 2, 2], [9, 9, 9])
+    renderer.render_cube([2, 2, 2], [9, 9, 9], fill="red")
 
     # draw origin
-    origin = camera.project(np.array([[0, 0, 0]]).T).T[0]
-    canvas.create_oval(origin[0], origin[1],
-                       origin[0] + 8, origin[1] + 8, fill="red")
+    # renderer.render_point([0, 0, 0], 5)
+    renderer.render_origin_marker()
 
-
-def key_press(event):
-    global camera
-
-    if event.char == "w":
-        camera.pos[2, 0] += 1
-    if event.char == "s":
-        camera.pos[2, 0] += -1
-    if event.char == "a":
-        camera.pos[0, 0] += 1
-    if event.char == "d":
-        camera.pos[0, 0] += -1
-    if event.char == "q":
-        camera.roll += -0.05
-    if event.char == "e":
-        camera.roll += 0.05
-    if event.char == "r":
-        camera.pitch += -0.05
-    if event.char == "f":
-        camera.pitch += 0.05
-
-    # render_PIL(canvas, renderer)
 
 render_batch_start_time = None
-render_batch_size = 20
+RENDER_BATCH_SIZE = 60
+TARGET_FPS = 40
+
+
 def frame(n=0):
     global camera, render_batch_start_time
-    camera.yaw += 0.005
-    
+    # camera.yaw += 0.005
+
     # measure performance by measuring frame rate in batches of 20
-    if n % render_batch_size == 0:
+    if n % RENDER_BATCH_SIZE == 0:
         if render_batch_start_time is not None:
-            batch_duration_ms = 1000 * (time.perf_counter() - render_batch_start_time)
-            print(f"Render x {render_batch_size} took {batch_duration_ms:4.0f} ms ({batch_duration_ms / render_batch_size:2.0f} ms avg, {batch_duration_ms / render_batch_size:2.0f} FPS)")
+            batch_duration_ms = 1000 * \
+                (time.perf_counter() - render_batch_start_time)
+            print(f"Render x {RENDER_BATCH_SIZE} took {batch_duration_ms:4.0f} ms ({batch_duration_ms / RENDER_BATCH_SIZE:3.0f} ms avg, {1000 * RENDER_BATCH_SIZE / batch_duration_ms:3.0f} FPS)")
         render_batch_start_time = time.perf_counter()
-    render_PIL(canvas, renderer)
+    update_canvas(renderer)
 
-
-    window.after(30, lambda: frame(n + 1))
-
-
-
-last_b1_x = None
-last_b1_y = None
-
-def b1_drag(event):
-    global camera, last_b1_x, last_b1_y
-
-    if last_b1_x is not None:
-        delta_x = event.x - last_b1_x
-        camera.yaw += delta_x / 100
-
-    if last_b1_y is not None:
-        delta_y = event.y - last_b1_y
-        camera.pitch += delta_y / 100
-
-    last_b1_x = event.x
-    last_b1_y = event.y
-
-def b1_release(event):
-    global last_b1_x, last_b1_y
-    last_b1_x = None
-    last_b1_y = None
-
-
-last_b2_x = None
-last_b2_y = None
-
-def b3_drag(event):
-    global camera, last_b2_x, last_b2_y
-
-    if last_b2_x is not None:
-        delta_x = event.x - last_b2_x
-        camera.pos[0, 0] += delta_x / 10
-
-    if last_b2_y is not None:
-        delta_y = event.y - last_b2_y
-        camera.pos[2, 0] += delta_y / 10
-
-    last_b2_x = event.x
-    last_b2_y = event.y
-
-def b3_release(event):
-    global last_b2_x, last_b2_y
-    last_b2_x = None
-    last_b2_y = None
+    window.after(1000 // TARGET_FPS, lambda: frame(n + 1))
 
 
 window = tk.Tk()
 window.title("Projection Matrices")
-canvas = tk.Canvas(width=400, height=400, bg="white")
-renderer = Renderer(canvas)
+canvas = tk.Canvas(width=600, height=450, bg="white")
+renderer = Renderer(canvas, camera)
 canvas.pack()
-render_PIL(canvas, renderer)
-window.bind("<B1-Motion>", b1_drag)
-window.bind("<ButtonRelease-1>", b1_release)
-window.bind("<B3-Motion>", b3_drag)
-window.bind("<ButtonRelease-3>", b3_release)
-# window.bind("w", key_press)
-# window.bind("s", key_press)
-# window.bind("a", key_press)
-# window.bind("d", key_press)
-# window.bind("q", key_press)
-# window.bind("e", key_press)
-# window.bind("r", key_press)
-# window.bind("f", key_press)
-window.after(30, frame)
+update_canvas(renderer)
+rotation_drag_handler = controls.RotationDragHandler(camera)
+rotation_drag_handler.bind_event_handlers(window, 1)
+position_drag_handler = controls.PositionDragHandler(camera)
+position_drag_handler.bind_event_handlers(window, 3)
+window.after(1000 // TARGET_FPS, frame)
 window.mainloop()
